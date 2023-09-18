@@ -5,7 +5,6 @@ import cv2
 import torch
 import os
 import sys
-import clip
 
 
 def convert_box_xywh_to_xyxy(box):
@@ -323,22 +322,6 @@ def fast_show_mask_gpu(
     ax.imshow(show_cpu)
 
 
-# clip
-@torch.no_grad()
-def retriev(
-    model, preprocess, elements: [Image.Image], search_text: str, device
-):
-    preprocessed_images = [preprocess(image).to(device) for image in elements]
-    tokenized_text = clip.tokenize([search_text]).to(device)
-    stacked_images = torch.stack(preprocessed_images)
-    image_features = model.encode_image(stacked_images)
-    text_features = model.encode_text(tokenized_text)
-    image_features /= image_features.norm(dim=-1, keepdim=True)
-    text_features /= text_features.norm(dim=-1, keepdim=True)
-    probs = 100.0 * image_features @ text_features.T
-    return probs[:, 0].softmax(dim=0)
-
-
 def crop_image(annotations, image_like):
     if isinstance(image_like, str):
         image = Image.open(image_like)
@@ -413,30 +396,3 @@ def point_prompt(masks, points, point_label, target_height, target_width):  # nu
                 onemask[mask] = 0
     onemask = onemask >= 1
     return onemask, 0
-
-
-def text_prompt(annotations, text, img_path, device, wider=False, threshold=0.9):
-    cropped_boxes, cropped_images, not_crop, origin_id, annotations_ = crop_image(
-        annotations, img_path
-    )
-    clip_model, preprocess = clip.load("ViT-B/32", device=device)
-    scores = retriev(
-        clip_model, preprocess, cropped_boxes, text, device=device
-    )
-    max_idx = scores.argsort()
-    max_idx = max_idx[-1]
-    max_idx = origin_id[int(max_idx)]
-
-    # find the biggest mask which contains the mask with max score
-    if wider:
-        mask0 = annotations_[max_idx]["segmentation"]
-        area0 = np.sum(mask0)
-        areas = [(i, np.sum(mask["segmentation"])) for i, mask in enumerate(annotations_) if i in origin_id]
-        areas = sorted(areas, key=lambda area: area[1], reverse=True)
-        indices = [area[0] for area in areas]
-        for index in indices:
-            if index == max_idx or np.sum(annotations_[index]["segmentation"] & mask0) / area0 > threshold:
-                max_idx = index
-                break
-
-    return annotations_[max_idx]["segmentation"], max_idx
